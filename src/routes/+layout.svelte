@@ -1,10 +1,11 @@
 <script>
   import { page } from '$app/stores';
+  import { base } from '$app/paths';
 </script>
 
 <nav>
-  <a href="/map" class:selected={$page.url.pathname === '/map'}>Map</a>
-  <a href="/weather" class:selected={$page.url.pathname === '/weather'}>Weather</a>
+  <a href="{base}/map" class:selected={$page.url.pathname === `${base}/map`}>Map</a>
+  <a href="{base}/weather" class:selected={$page.url.pathname === `${base}/weather`}>Weather</a>
 </nav>
 
 <slot />
@@ -15,7 +16,7 @@
     gap: 10px;
     margin-bottom: 20px;
 
-    /* ★ 追加：地図より前に出す */
+    /* 地図より前に出す */
     position: relative;
     z-index: 2000;
   }
