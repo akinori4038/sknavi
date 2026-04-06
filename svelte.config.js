@@ -3,8 +3,8 @@ import { relative, sep } from 'node:path';
 
 const dev = process.argv.includes('dev');
 
-// ★ GitHub Pages のリポジトリ名を入れる
-const repoName = 'sknavi';   // ← 必ずあなたのリポジトリ名に変更
+// ★ GitHub Pages のリポジトリ名
+const repoName = 'sknavi';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
@@ -20,6 +20,9 @@ const config = {
 		adapter: adapter(),
 		paths: {
 			base: dev ? '' : `/${repoName}`
+		},
+		prerender: {
+			handleHttpError: 'ignore'
 		}
 	}
 };
