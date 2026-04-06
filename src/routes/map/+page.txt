@@ -9,6 +9,12 @@
   const isPathOn = writable(false);    // 軌跡表示ON/OFF
   const wpInfo = writable("");         // WP距離・方位
 
+  let trackingValue = true;
+  isTracking.subscribe(v => trackingValue = v);
+
+  let pathVisible = false;
+  isPathOn.subscribe(v => pathVisible = v);
+
   let watchId;
   let marker = null;
   let track = [];
@@ -21,6 +27,34 @@
   let waypoint = null;
   let wpMarker = null;
   let wpLineAdded = false;
+
+  /* -----------------------------
+     ▼ Wake Lock（スリープ防止）
+  ------------------------------ */
+  let wakeLock = null;
+
+  async function enableWakeLock() {
+    try {
+      wakeLock = await navigator.wakeLock.request("screen");
+      console.log("Wake Lock enabled");
+
+      wakeLock.addEventListener("release", () => {
+        console.log("Wake Lock released by system");
+      });
+    } catch (err) {
+      console.error("Wake Lock error:", err);
+    }
+  }
+
+  function disableWakeLock() {
+    if (wakeLock) {
+      wakeLock.release();
+      wakeLock = null;
+      console.log("Wake Lock disabled");
+    }
+  }
+
+  /* ----------------------------- */
 
   const kayakSvg = `data:image/svg+xml;utf8,${encodeURIComponent(`
     <svg width="60" height="60" viewBox="0 0 100 100"
@@ -97,6 +131,26 @@
   }
 
   onMount(() => {
+
+    /* ▼ 地図画面に入った瞬間に Wake Lock ON */
+    enableWakeLock();
+
+    /* ▼ タブ復帰時に再取得（OS が勝手に解除する対策） */
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && wakeLock === null) {
+        enableWakeLock();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    /* ▼ ページ離脱時に Wake Lock OFF */
+    const cleanup = () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      disableWakeLock();
+    };
+
+    /* ---------------- 地図初期化 ---------------- */
+
     map = new maplibregl.Map({
       container: "map",
       style: {
@@ -202,6 +256,7 @@
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
 
+      /* ▼ heading 計算（進行方向） */
       if (lastLat !== null && lastLng !== null) {
         const move = calcDistance(lastLat, lastLng, lat, lng);
         if (move > 1) {
@@ -211,6 +266,7 @@
       lastLat = lat;
       lastLng = lng;
 
+      /* ▼ カヤックアイコン更新 */
       if (!marker) {
         marker = new maplibregl.Marker({
           element: createKayakIcon()
@@ -224,10 +280,12 @@
         inner.style.transform = `rotate(${heading}deg)`;
       }
 
-      isTracking.subscribe(v => {
-        if (v) map.setCenter([lng, lat]);
-      });
+      /* ▼ センタリング */
+      if (trackingValue) {
+        map.setCenter([lng, lat]);
+      }
 
+      /* ▼ 軌跡 */
       track.push([lng, lat]);
       updateTrackLine();
 
@@ -235,10 +293,11 @@
         map.setLayoutProperty(
           "track-layer",
           "visibility",
-          $isPathOn ? "visible" : "none"
+          pathVisible ? "visible" : "none"
         );
       }
 
+      /* ▼ WP 更新 */
       if (waypoint) {
         const [wLat, wLng] = waypoint;
 
@@ -284,6 +343,8 @@
         }
       }
     }, console.warn, { enableHighAccuracy: true });
+
+    return cleanup;
   });
 
   function createKayakIcon() {
@@ -345,7 +406,6 @@
     font-size: 14px;
   }
 
-  /* 右下 */
   .bottom-right {
     bottom: 10px;
     right: 10px;
@@ -356,7 +416,6 @@
     right: 10px;
   }
 
-  /* 左下（右下と左右対称に揃えた） */
   .bottom-left-2 {
     bottom: 60px;
     left: 10px;
@@ -367,13 +426,11 @@
     left: 10px;
   }
 
-  /* 右上：WP距離・方位 */
   .top-right {
     top: 10px;
     right: 10px;
   }
 
-  /* スライドスイッチ */
   .switch {
     position: relative;
     display: inline-block;
@@ -422,7 +479,6 @@
 
 <div id="map"></div>
 
-<!-- 右下：センタリングSW -->
 <div class="overlay bottom-right-2">
   <label class="switch">
     <input type="checkbox" bind:checked={$isTracking}>
@@ -431,7 +487,6 @@
   <span style="margin-left:8px;">センタリング</span>
 </div>
 
-<!-- 右下：WPクリア -->
 <div class="overlay bottom-right">
   <button
     on:click={clearWaypoint}
@@ -441,12 +496,10 @@
   </button>
 </div>
 
-<!-- 右上：WP距離・方位 -->
 <div class="overlay top-right">
   {$wpInfo}
 </div>
 
-<!-- 左下：軌跡表示SW（右下と同じ位置関係） -->
 <div class="overlay bottom-left-2">
   <label class="switch">
     <input type="checkbox" bind:checked={$isPathOn}>
@@ -455,7 +508,6 @@
   <span style="margin-left:8px;">軌跡表示</span>
 </div>
 
-<!-- 左下：軌跡クリア（右下と同じ位置関係） -->
 <div class="overlay bottom-left-3">
   <button on:click={clearTrack} style="background:#888; color:white;">
     軌跡クリア
