@@ -259,7 +259,7 @@
       /* ▼ heading 計算（進行方向） */
       if (lastLat !== null && lastLng !== null) {
         const move = calcDistance(lastLat, lastLng, lat, lng);
-        if (move > 1) {
+        if (move > 0.3) {   // ★ ここを 1 → 0.3 に変更
           heading = calcBearing(lastLat, lastLng, lat, lng);
         }
       }
