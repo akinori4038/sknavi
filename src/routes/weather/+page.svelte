@@ -318,6 +318,7 @@
 					{/each}
 				</tr>
 
+				<!-- ★ うねり方向：反対方向（+180°）に変更 -->
 				<tr>
 					<td>うねり方向</td>
 					{#each swellDir as v, i}
@@ -330,7 +331,7 @@
 								<svg
 									class="triangle-small"
 									viewBox="0 0 24 24"
-									style={`transform: rotate(${v}deg);`}
+									style={`transform: rotate(${(v + 180) % 360}deg);`}
 								>
 									<polygon points="12,0 16,24 8,24" fill="blue" />
 								</svg>
