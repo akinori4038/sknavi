@@ -1,33 +1,37 @@
 <script>
 	import { onMount } from 'svelte';
+	import { writable } from 'svelte/store';
 	import maplibregl from 'maplibre-gl';
 
-	let map = $state(null);
-	let isTracking = $state(true); // 現在地追従
-	let isPathOn = $state(false); // 軌跡表示
-	let wpInfo = $state(''); // WP距離・方位
+	let map;
 
-	let watchId = $state(null);
-	let marker = $state(null);
-	let track = $state([]); // 配列もOK
-	let trackLine = $state(null);
+	const isTracking = writable(true); // 現在地（画面ロック）
+	const isPathOn = writable(false); // 軌跡表示ON/OFF
+	const wpInfo = writable(''); // WP距離・方位
 
-	let heading = $state(0);
-	let lastLat = $state(null);
-	let lastLng = $state(null);
+	let trackingValue = true;
+	isTracking.subscribe((v) => (trackingValue = v));
 
-	let waypoint = $state(null);
-	let wpMarker = $state(null);
-	let wpLineAdded = $state(false);
+	let pathVisible = false;
+	isPathOn.subscribe((v) => (pathVisible = v));
 
-	// ★ 追加：進行方向モード（Heading-Up）
-	let isHeadingUp = $state(false); // false = 北固定, true = 進行方向を上
+	let watchId;
+	let marker = null;
+	let track = [];
+	let trackLine = null;
+
+	let heading = 0;
+	let lastLat = null;
+	let lastLng = null;
+
+	let waypoint = null;
+	let wpMarker = null;
+	let wpLineAdded = false;
 
 	/* -----------------------------
      ▼ Wake Lock（スリープ防止）
   ------------------------------ */
-	//	let wakeLock = null;
-	let wakeLock = $state(null);
+	let wakeLock = null;
 
 	async function enableWakeLock() {
 		try {
@@ -110,7 +114,7 @@
 			wpLineAdded = false;
 		}
 
-		wpInfo = '';
+		wpInfo.set('');
 	}
 
 	function clearTrack() {
@@ -181,75 +185,6 @@
 			});
 		});
 
-		let pressTimer = null;
-		let longPressDuration = 600; // 長押し判定時間
-		let startPos = null;
-		let moved = false;
-		let moveThreshold = 10; // px（これ以上動いたらドラッグと判定）
-
-		// タッチ開始
-		map.on('touchstart', (e) => {
-			// ★ 指が1本でなければ長押しを無効化
-			if (e.originalEvent.touches.length !== 1) {
-				clearTimeout(pressTimer);
-				return;
-			}
-
-			startPos = e.point;
-			moved = false;
-
-			pressTimer = setTimeout(() => {
-				if (!moved) handleLongPress(e);
-			}, longPressDuration);
-		});
-
-		// タッチ移動（ドラッグ判定）
-		map.on('touchmove', (e) => {
-			if (!startPos) return;
-
-			const dx = e.point.x - startPos.x;
-			const dy = e.point.y - startPos.y;
-
-			if (Math.sqrt(dx * dx + dy * dy) > moveThreshold) {
-				moved = true;
-				clearTimeout(pressTimer);
-			}
-		});
-
-		// タッチ終了
-		map.on('touchend', () => {
-			clearTimeout(pressTimer);
-			startPos = null;
-		});
-
-		// --- PC マウス版（同じ仕組み） ---
-		map.on('mousedown', (e) => {
-			startPos = e.point;
-			moved = false;
-
-			pressTimer = setTimeout(() => {
-				if (!moved) handleLongPress(e);
-			}, longPressDuration);
-		});
-
-		map.on('mousemove', (e) => {
-			if (!startPos) return;
-
-			const dx = e.point.x - startPos.x;
-			const dy = e.point.y - startPos.y;
-
-			if (Math.sqrt(dx * dx + dy * dy) > moveThreshold) {
-				moved = true;
-				clearTimeout(pressTimer);
-			}
-		});
-
-		map.on('mouseup', () => {
-			clearTimeout(pressTimer);
-			startPos = null;
-		});
-
-		/*
 		map.on('click', (e) => {
 			const wLat = e.lngLat.lat;
 			const wLng = e.lngLat.lng;
@@ -272,10 +207,8 @@
 
 				const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
 
-				//				wpInfo = `距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`;
-				wpInfo = `距離: ${distStr} \n方位: ${bearing.toFixed(1)}°`;
+				wpInfo.set(`距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`);
 
-				// WP ライン
 				const lineData = {
 					type: 'Feature',
 					geometry: {
@@ -308,10 +241,9 @@
 					map.getSource('wp-line').setData(lineData);
 				}
 			} else {
-				wpInfo = 'WP 設定済み（現在位置未取得）';
+				wpInfo.set('WP 設定済み（現在位置未取得）');
 			}
 		});
-		*/
 
 		watchId = navigator.geolocation.watchPosition(
 			(pos) => {
@@ -340,33 +272,13 @@
 					marker.setLngLat([lng, lat]);
 				}
 
-				// heading に応じて回転
 				const inner = marker.getElement().querySelector('.kayak-rot');
 				if (inner) {
 					inner.style.transform = `rotate(${heading}deg)`;
 				}
-				/******************/
-				// ★ 追加：進行方向モードのときはカヤックを回転させない
-				if (inner) {
-					if (!isHeadingUp) {
-						// 北固定モード → カヤックを heading に合わせて回転
-						inner.style.transform = `rotate(${heading}deg)`;
-					} else {
-						// 進行方向モード → カヤックは常に上向き
-						inner.style.transform = `rotate(0deg)`;
-					}
-				}
-				// --- ★ 追加：地図の向き制御 ---
-				if (isTracking) {
-					if (isHeadingUp) {
-						map.setBearing(heading); // 進行方向を上
-					} else {
-						map.setBearing(0); // 北を上
-					}
-				}
-				/******************/
-				/* ▼ 現在地追従 */
-				if (isTracking) {
+
+				/* ▼ 現在地 */
+				if (trackingValue) {
 					map.setCenter([lng, lat]);
 				}
 
@@ -374,9 +286,8 @@
 				track.push([lng, lat]);
 				updateTrackLine();
 
-				/* ▼ 軌跡の表示/非表示 */
 				if (map.getLayer('track-layer')) {
-					map.setLayoutProperty('track-layer', 'visibility', isPathOn ? 'visible' : 'none'); // ★ pathVisible → isPathOn に統一
+					map.setLayoutProperty('track-layer', 'visibility', pathVisible ? 'visible' : 'none');
 				}
 
 				/* ▼ WP 更新 */
@@ -388,8 +299,7 @@
 
 					const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
 
-					//					wpInfo = `距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`;
-					wpInfo = `距離: ${distStr} \n方位: ${bearing.toFixed(1)}°`;
+					wpInfo.set(`距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`);
 
 					const lineData = {
 						type: 'Feature',
@@ -430,66 +340,6 @@
 
 		return cleanup;
 	});
-
-	function handleLongPress(e) {
-		const wLat = e.lngLat.lat;
-		const wLng = e.lngLat.lng;
-
-		waypoint = [wLat, wLng];
-
-		if (!wpMarker) {
-			wpMarker = new maplibregl.Marker({ color: 'green' }).setLngLat([wLng, wLat]).addTo(map);
-		} else {
-			wpMarker.setLngLat([wLng, wLat]);
-		}
-
-		if (marker) {
-			const pos = marker.getLngLat();
-			const lat = pos.lat;
-			const lng = pos.lng;
-
-			const dist = calcDistance(lat, lng, wLat, wLng);
-			const bearing = calcBearing(lat, lng, wLat, wLng);
-
-			const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
-
-			wpInfo = `距離: ${distStr}\n方位: ${bearing.toFixed(1)}°`;
-
-			const lineData = {
-				type: 'Feature',
-				geometry: {
-					type: 'LineString',
-					coordinates: [
-						[lng, lat],
-						[wLng, wLat]
-					]
-				}
-			};
-
-			if (!wpLineAdded) {
-				map.addSource('wp-line', {
-					type: 'geojson',
-					data: lineData
-				});
-
-				map.addLayer({
-					id: 'wp-line-layer',
-					type: 'line',
-					source: 'wp-line',
-					paint: {
-						'line-color': 'blue',
-						'line-width': 3
-					}
-				});
-
-				wpLineAdded = true;
-			} else {
-				map.getSource('wp-line').setData(lineData);
-			}
-		} else {
-			wpInfo = 'WP 設定済み（現在位置未取得）';
-		}
-	}
 
 	function createKayakIcon() {
 		const outer = document.createElement('div');
@@ -536,7 +386,7 @@
 
 <div class="overlay bottom-right-2">
 	<label class="switch">
-		<input type="checkbox" bind:checked={isTracking} />
+		<input type="checkbox" bind:checked={$isTracking} />
 		<span class="slider"></span>
 	</label>
 	<span style="margin-left:8px;">現在地</span>
@@ -544,7 +394,7 @@
 
 <div class="overlay bottom-right">
 	<button
-		onclick={clearWaypoint}
+		on:click={clearWaypoint}
 		style="background: {waypoint ? '#0078d4' : '#888'}; color: white;"
 	>
 		WPクリア
@@ -552,27 +402,19 @@
 </div>
 
 <div class="overlay top-right">
-	{wpInfo}
+	{$wpInfo}
 </div>
 
 <div class="overlay bottom-left-2">
 	<label class="switch">
-		<input type="checkbox" bind:checked={isPathOn} />
+		<input type="checkbox" bind:checked={$isPathOn} />
 		<span class="slider"></span>
 	</label>
 	<span style="margin-left:8px;">軌跡表示</span>
 </div>
 
 <div class="overlay bottom-left-3">
-	<button onclick={clearTrack} style="background:#888; color:white;"> 軌跡クリア </button>
-</div>
-
-<div class="overlay top-left">
-	<label class="switch">
-		<input type="checkbox" bind:checked={isHeadingUp} />
-		<span class="slider"></span>
-	</label>
-	<span style="margin-left:8px;">進行方向</span>
+	<button on:click={clearTrack} style="background:#888; color:white;"> 軌跡クリア </button>
 </div>
 
 <style>
@@ -590,8 +432,7 @@
 		padding: 6px 10px;
 		border-radius: 6px;
 		z-index: 1000;
-		font-size: 20px;
-		white-space: pre-line;
+		font-size: 14px;
 	}
 
 	.bottom-right {

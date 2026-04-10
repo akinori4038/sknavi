@@ -181,75 +181,6 @@
 			});
 		});
 
-		let pressTimer = null;
-		let longPressDuration = 600; // 長押し判定時間
-		let startPos = null;
-		let moved = false;
-		let moveThreshold = 10; // px（これ以上動いたらドラッグと判定）
-
-		// タッチ開始
-		map.on('touchstart', (e) => {
-			// ★ 指が1本でなければ長押しを無効化
-			if (e.originalEvent.touches.length !== 1) {
-				clearTimeout(pressTimer);
-				return;
-			}
-
-			startPos = e.point;
-			moved = false;
-
-			pressTimer = setTimeout(() => {
-				if (!moved) handleLongPress(e);
-			}, longPressDuration);
-		});
-
-		// タッチ移動（ドラッグ判定）
-		map.on('touchmove', (e) => {
-			if (!startPos) return;
-
-			const dx = e.point.x - startPos.x;
-			const dy = e.point.y - startPos.y;
-
-			if (Math.sqrt(dx * dx + dy * dy) > moveThreshold) {
-				moved = true;
-				clearTimeout(pressTimer);
-			}
-		});
-
-		// タッチ終了
-		map.on('touchend', () => {
-			clearTimeout(pressTimer);
-			startPos = null;
-		});
-
-		// --- PC マウス版（同じ仕組み） ---
-		map.on('mousedown', (e) => {
-			startPos = e.point;
-			moved = false;
-
-			pressTimer = setTimeout(() => {
-				if (!moved) handleLongPress(e);
-			}, longPressDuration);
-		});
-
-		map.on('mousemove', (e) => {
-			if (!startPos) return;
-
-			const dx = e.point.x - startPos.x;
-			const dy = e.point.y - startPos.y;
-
-			if (Math.sqrt(dx * dx + dy * dy) > moveThreshold) {
-				moved = true;
-				clearTimeout(pressTimer);
-			}
-		});
-
-		map.on('mouseup', () => {
-			clearTimeout(pressTimer);
-			startPos = null;
-		});
-
-		/*
 		map.on('click', (e) => {
 			const wLat = e.lngLat.lat;
 			const wLng = e.lngLat.lng;
@@ -311,7 +242,6 @@
 				wpInfo = 'WP 設定済み（現在位置未取得）';
 			}
 		});
-		*/
 
 		watchId = navigator.geolocation.watchPosition(
 			(pos) => {
@@ -430,66 +360,6 @@
 
 		return cleanup;
 	});
-
-	function handleLongPress(e) {
-		const wLat = e.lngLat.lat;
-		const wLng = e.lngLat.lng;
-
-		waypoint = [wLat, wLng];
-
-		if (!wpMarker) {
-			wpMarker = new maplibregl.Marker({ color: 'green' }).setLngLat([wLng, wLat]).addTo(map);
-		} else {
-			wpMarker.setLngLat([wLng, wLat]);
-		}
-
-		if (marker) {
-			const pos = marker.getLngLat();
-			const lat = pos.lat;
-			const lng = pos.lng;
-
-			const dist = calcDistance(lat, lng, wLat, wLng);
-			const bearing = calcBearing(lat, lng, wLat, wLng);
-
-			const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
-
-			wpInfo = `距離: ${distStr}\n方位: ${bearing.toFixed(1)}°`;
-
-			const lineData = {
-				type: 'Feature',
-				geometry: {
-					type: 'LineString',
-					coordinates: [
-						[lng, lat],
-						[wLng, wLat]
-					]
-				}
-			};
-
-			if (!wpLineAdded) {
-				map.addSource('wp-line', {
-					type: 'geojson',
-					data: lineData
-				});
-
-				map.addLayer({
-					id: 'wp-line-layer',
-					type: 'line',
-					source: 'wp-line',
-					paint: {
-						'line-color': 'blue',
-						'line-width': 3
-					}
-				});
-
-				wpLineAdded = true;
-			} else {
-				map.getSource('wp-line').setData(lineData);
-			}
-		} else {
-			wpInfo = 'WP 設定済み（現在位置未取得）';
-		}
-	}
 
 	function createKayakIcon() {
 		const outer = document.createElement('div');
