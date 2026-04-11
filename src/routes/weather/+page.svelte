@@ -21,6 +21,13 @@
 	let swellPeriod = $state([]);
 	let seaTemp = $state([]);
 
+	// ★ 日の出・日の入りマップ（ローカル日付ベース）
+	let sunMap = $state({});
+
+	// ★ 各日の sunrise/sunset に最も近いスロット index
+	let sunriseIndexMap = {};
+	let sunsetIndexMap = {};
+
 	let highlightIndex = $state(null);
 
 	function splitDateTime(t) {
@@ -30,6 +37,10 @@
 		const hh = String(d.getHours()).padStart(2, '0');
 		const mm = String(d.getMinutes()).padStart(2, '0');
 		return { date: `${MM}/${DD}`, time: `${hh}:${mm}` };
+	}
+
+	function getLocalDateString(d) {
+		return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 	}
 
 	function isDateBoundary(i) {
@@ -75,37 +86,64 @@
 		return '#004c99';
 	}
 
-	onMount(() => {
-		let responded = false;
+	// ★ 気温の色分け
+	function tempColor(v) {
+		if (v < 0) return 'black';
+		if (v < 10) return 'blue';
+		if (v < 20) return 'green';
+		if (v < 30) return 'orange';
+		return 'red';
+	}
 
-		try {
-			navigator.geolocation.getCurrentPosition(
-				(pos) => {
-					responded = true;
-					lat = pos.coords.latitude;
-					lon = pos.coords.longitude;
-					loadAll();
-				},
-				(err) => {
-					responded = true;
-					lat = 35.4437;
-					lon = 139.638;
-					loadAll();
-				}
-			);
+	// ★ ローカル日付ベースの昼夜判定
+	function isDaytime(t) {
+		const d = new Date(t);
+		const dateStr = getLocalDateString(d);
 
-			setTimeout(() => {
-				if (!responded) {
-					lat = 35.4437;
-					lon = 139.638;
-					loadAll();
-				}
-			}, 1000);
-		} catch (e) {
-			lat = 35.4437;
-			lon = 139.638;
-			loadAll();
+		const info = sunMap[dateStr];
+		if (!info) {
+			const h = d.getHours();
+			return h >= 6 && h < 18;
 		}
+
+		const sr = new Date(info.sunrise).getTime();
+		const ss = new Date(info.sunset).getTime();
+		const tt = d.getTime();
+
+		return tt >= sr && tt < ss;
+	}
+
+	// ★ 各日の sunrise/sunset に最も近いスロット index を求める
+	function findClosestIndexForDay(targetTime) {
+		const target = new Date(targetTime).getTime();
+		let best = 0;
+		let diffMin = Infinity;
+
+		times.forEach((t, i) => {
+			const tt = new Date(t).getTime();
+			const diff = Math.abs(tt - target);
+			if (diff < diffMin) {
+				diffMin = diff;
+				best = i;
+			}
+		});
+
+		return best;
+	}
+
+	onMount(() => {
+		navigator.geolocation.getCurrentPosition(
+			(pos) => {
+				lat = pos.coords.latitude;
+				lon = pos.coords.longitude;
+				loadAll();
+			},
+			() => {
+				lat = 35.4437;
+				lon = 139.638;
+				loadAll();
+			}
+		);
 	});
 
 	async function loadAll() {
@@ -113,8 +151,18 @@
 		error = null;
 
 		try {
-			await Promise.all([loadWeather(), loadMarine()]);
+			await Promise.all([loadWeather(), loadMarine(), loadSun()]);
 			calcHighlightIndex();
+
+			// ★ 各日の sunrise/sunset に最も近いスロットを計算
+			sunriseIndexMap = {};
+			sunsetIndexMap = {};
+
+			for (const dateStr in sunMap) {
+				const info = sunMap[dateStr];
+				sunriseIndexMap[dateStr] = findClosestIndexForDay(info.sunrise);
+				sunsetIndexMap[dateStr] = findClosestIndexForDay(info.sunset);
+			}
 		} catch (e) {
 			error = 'データ取得に失敗しました';
 		}
@@ -170,12 +218,54 @@
 		swellPeriod = json.hourly.swell_wave_period;
 		seaTemp = json.hourly.sea_surface_temperature;
 	}
+
+	// ★ 日の出・日の入りをローカル日付でマップ化
+	async function loadSun() {
+		const url =
+			`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+			`&daily=sunrise,sunset&timezone=Asia/Tokyo`;
+
+		let res = await fetch(url);
+		let json = await res.json();
+
+		sunMap = {};
+
+		json.daily.time.forEach((d, i) => {
+			sunMap[d] = {
+				sunrise: json.daily.sunrise[i],
+				sunset: json.daily.sunset[i]
+			};
+		});
+	}
 </script>
 
 <h2>3日間の天気・海況（1時間ごと）</h2>
 
+<!-- ★ 右上に日の出・日の入り表示 -->
+{#if sunMap}
+	{@const todayStr = getLocalDateString(new Date())}
+	{@const todaySun = sunMap[todayStr]}
+
+	{#if todaySun}
+		<div class="sun-info">
+			<div>
+				🌅 日の出　：{new Date(todaySun.sunrise).toLocaleTimeString('ja-JP', {
+					hour: '2-digit',
+					minute: '2-digit'
+				})}
+			</div>
+			<div>
+				🌇 日の入り：{new Date(todaySun.sunset).toLocaleTimeString('ja-JP', {
+					hour: '2-digit',
+					minute: '2-digit'
+				})}
+			</div>
+		</div>
+	{/if}
+{/if}
+
 {#if loading}
-	<p>読み込み中…</p>
+	<p>データ取得中…</p>
 {:else if error}
 	<p style="color:red">{error}</p>
 {:else}
@@ -183,15 +273,30 @@
 		<table>
 			<thead>
 				<tr>
-					<th>日時</th>
+					<td>日時</td>
 
 					{#each times as t, i}
 						{@const dt = splitDateTime(t)}
+
+						<!-- ★ 日の出・日の入りスロットは薄ピンク -->
 						<th
 							class="
                                 datetime-header
                                 {i === highlightIndex ? 'highlight-top' : ''}
                                 {isDateBoundary(i) ? 'date-border' : ''}
+                            "
+							style="
+                                background:
+                                    {(() => {
+								const d = new Date(t);
+								const dateStr = getLocalDateString(d);
+
+								return i === sunriseIndexMap[dateStr] || i === sunsetIndexMap[dateStr]
+									? '#ffe6f2' /* ★ 薄ピンク */
+									: isDaytime(t)
+										? '#fff7cc' /* 昼：薄黄色 */
+										: '#cce0ff'; /* 夜：薄青 */
+							})()};
                             "
 						>
 							<div>{dt.date}</div>
@@ -242,6 +347,7 @@
 							class="{i === highlightIndex ? 'highlight-mid' : ''} {isDateBoundary(i)
 								? 'date-border'
 								: ''}"
+							style="color:{tempColor(v)}"
 						>
 							{v.toFixed(1)}
 						</td>
@@ -318,7 +424,6 @@
 					{/each}
 				</tr>
 
-				<!-- ★ うねり方向：反対方向（+180°）に変更 -->
 				<tr>
 					<td>うねり方向</td>
 					{#each swellDir as v, i}
@@ -377,6 +482,20 @@
 {/if}
 
 <style>
+	/* ★ 右上の日の出・日の入り表示 */
+	.sun-info {
+		position: absolute;
+		top: 10px;
+		right: 20px;
+		text-align: right;
+		font-size: 14px;
+		background: rgba(255, 255, 255, 0.8);
+		padding: 6px 10px;
+		border-radius: 6px;
+		box-shadow: 0 0 4px rgba(0, 0, 0, 0.2);
+		line-height: 1.4;
+	}
+
 	.table-wrapper {
 		overflow-x: scroll;
 		border: 1px solid #ccc;
@@ -426,7 +545,6 @@
 		align-items: center;
 	}
 
-	/* 三角形アイコン（底辺1/3 & 鋭角 & 27px） */
 	.triangle-small {
 		width: 27px;
 		height: 27px;
