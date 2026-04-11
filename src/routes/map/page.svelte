@@ -2,9 +2,7 @@
 	import { onMount } from 'svelte';
 	import maplibregl from 'maplibre-gl';
 
-	// ▼ UI と連動する変数はすべて $state()
 	let map = $state(null);
-
 	let isTracking = $state(true); // 現在地追従
 	let isPathOn = $state(false); // 軌跡表示
 	let wpInfo = $state(''); // WP距離・方位
@@ -22,9 +20,13 @@
 	let wpMarker = $state(null);
 	let wpLineAdded = $state(false);
 
+	// ★ 追加：進行方向モード（Heading-Up）
+	let isHeadingUp = $state(false); // false = 北固定, true = 進行方向を上
+
 	/* -----------------------------
      ▼ Wake Lock（スリープ防止）
-    ------------------------------ */
+  ------------------------------ */
+	//	let wakeLock = null;
 	let wakeLock = $state(null);
 
 	async function enableWakeLock() {
@@ -51,27 +53,27 @@
 	/* ----------------------------- */
 
 	const kayakSvg = `data:image/svg+xml;utf8,${encodeURIComponent(`
-        <svg width="60" height="60" viewBox="0 0 100 100"
-        xmlns="http://www.w3.org/2000/svg">
-        <defs>
-            <linearGradient id="kayakBody" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#4de0d8"/>
-            <stop offset="50%" stop-color="#1fb5ad"/>
-            <stop offset="100%" stop-color="#0e7f79"/>
-            </linearGradient>
-            <linearGradient id="cockpitGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#777"/>
-            <stop offset="100%" stop-color="#222"/>
-            </linearGradient>
-        </defs>
+    <svg width="60" height="60" viewBox="0 0 100 100"
+    xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="kayakBody" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#4de0d8"/>
+          <stop offset="50%" stop-color="#1fb5ad"/>
+          <stop offset="100%" stop-color="#0e7f79"/>
+        </linearGradient>
+        <linearGradient id="cockpitGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#777"/>
+          <stop offset="100%" stop-color="#222"/>
+        </linearGradient>
+      </defs>
 
-        <path d="M50 3 C56 22, 60 40, 60 50 C60 60, 56 78, 50 97 C44 78, 40 60, 40 50 C40 40, 44 22, 50 3 Z"
-                fill="url(#kayakBody)" stroke="#0a5f5a" stroke-width="3"/>
+      <path d="M50 3 C56 22, 60 40, 60 50 C60 60, 56 78, 50 97 C44 78, 40 60, 40 50 C40 40, 44 22, 50 3 Z"
+            fill="url(#kayakBody)" stroke="#0a5f5a" stroke-width="3"/>
 
-        <ellipse cx="50" cy="50" rx="5" ry="12"
-                fill="url(#cockpitGrad)" stroke="#000" stroke-width="3"/>
-        </svg>
-    `)}`;
+      <ellipse cx="50" cy="50" rx="5" ry="12"
+               fill="url(#cockpitGrad)" stroke="#000" stroke-width="3"/>
+    </svg>
+  `)}`;
 
 	function calcDistance(lat1, lon1, lat2, lon2) {
 		const R = 6371000;
@@ -94,8 +96,6 @@
 		return (toDeg(Math.atan2(y, x)) + 360) % 360;
 	}
 
-	// part1 で $state() にしてある前提
-
 	function clearWaypoint() {
 		waypoint = null;
 
@@ -110,11 +110,11 @@
 			wpLineAdded = false;
 		}
 
-		wpInfo = ''; // ★ store ではなく $state なので set() は使わない
+		wpInfo = '';
 	}
 
 	function clearTrack() {
-		track = []; // ★ $state([]) なので代入でOK
+		track = [];
 
 		if (map.getSource('track')) {
 			map.getSource('track').setData({
@@ -125,10 +125,10 @@
 	}
 
 	onMount(() => {
-		// Wake Lock ON
+		/* ▼ 地図画面に入った瞬間に Wake Lock ON */
 		enableWakeLock();
 
-		// タブ復帰時に再取得
+		/* ▼ タブ復帰時に再取得（OS が勝手に解除する対策） */
 		const handleVisibility = () => {
 			if (document.visibilityState === 'visible' && wakeLock === null) {
 				enableWakeLock();
@@ -136,17 +136,14 @@
 		};
 		document.addEventListener('visibilitychange', handleVisibility);
 
-		// ページ離脱時に Wake Lock OFF
-		return () => {
+		/* ▼ ページ離脱時に Wake Lock OFF */
+		const cleanup = () => {
 			document.removeEventListener('visibilitychange', handleVisibility);
 			disableWakeLock();
 		};
-	});
 
-	// part1 で $state(null) にしてある前提
-	// let map = $state(null);
+		/* ---------------- 地図初期化 ---------------- */
 
-	onMount(() => {
 		map = new maplibregl.Map({
 			container: 'map',
 			style: {
@@ -184,70 +181,74 @@
 			});
 		});
 
-		map.on('click', (e) => {
-			const wLat = e.lngLat.lat;
-			const wLng = e.lngLat.lng;
+		let pressTimer = null;
+		let longPressDuration = 600; // 長押し判定時間
+		let startPos = null;
+		let moved = false;
+		let moveThreshold = 10; // px（これ以上動いたらドラッグと判定）
 
-			waypoint = [wLat, wLng]; // ★ $state() なので代入でOK
-
-			// WP マーカー
-			if (!wpMarker) {
-				wpMarker = new maplibregl.Marker({ color: 'green' }).setLngLat([wLng, wLat]).addTo(map);
-			} else {
-				wpMarker.setLngLat([wLng, wLat]);
+		// タッチ開始
+		map.on('touchstart', (e) => {
+			// ★ 指が1本でなければ長押しを無効化
+			if (e.originalEvent.touches.length !== 1) {
+				clearTimeout(pressTimer);
+				return;
 			}
 
-			// 現在位置がある場合
-			if (marker) {
-				const pos = marker.getLngLat();
-				const lat = pos.lat;
-				const lng = pos.lng;
+			startPos = e.point;
+			moved = false;
 
-				const dist = calcDistance(lat, lng, wLat, wLng);
-				const bearing = calcBearing(lat, lng, wLat, wLng);
+			pressTimer = setTimeout(() => {
+				if (!moved) handleLongPress(e);
+			}, longPressDuration);
+		});
 
-				const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
+		// タッチ移動（ドラッグ判定）
+		map.on('touchmove', (e) => {
+			if (!startPos) return;
 
-				// ★ store ではなく $state なので set() は使わない
-				wpInfo = `距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`;
+			const dx = e.point.x - startPos.x;
+			const dy = e.point.y - startPos.y;
 
-				// WP ライン
-				const lineData = {
-					type: 'Feature',
-					geometry: {
-						type: 'LineString',
-						coordinates: [
-							[lng, lat],
-							[wLng, wLat]
-						]
-					}
-				};
-
-				if (!wpLineAdded) {
-					map.addSource('wp-line', {
-						type: 'geojson',
-						data: lineData
-					});
-
-					map.addLayer({
-						id: 'wp-line-layer',
-						type: 'line',
-						source: 'wp-line',
-						paint: {
-							'line-color': 'blue',
-							'line-width': 3
-						}
-					});
-
-					wpLineAdded = true; // ★ $state() なので代入でOK
-				} else {
-					map.getSource('wp-line').setData(lineData);
-				}
-			} else {
-				// ★ ここも set() ではなく代入
-				wpInfo = 'WP 設定済み（現在位置未取得）';
+			if (Math.sqrt(dx * dx + dy * dy) > moveThreshold) {
+				moved = true;
+				clearTimeout(pressTimer);
 			}
 		});
+
+		// タッチ終了
+		map.on('touchend', () => {
+			clearTimeout(pressTimer);
+			startPos = null;
+		});
+
+		// --- PC マウス版（同じ仕組み） ---
+		map.on('mousedown', (e) => {
+			startPos = e.point;
+			moved = false;
+
+			pressTimer = setTimeout(() => {
+				if (!moved) handleLongPress(e);
+			}, longPressDuration);
+		});
+
+		map.on('mousemove', (e) => {
+			if (!startPos) return;
+
+			const dx = e.point.x - startPos.x;
+			const dy = e.point.y - startPos.y;
+
+			if (Math.sqrt(dx * dx + dy * dy) > moveThreshold) {
+				moved = true;
+				clearTimeout(pressTimer);
+			}
+		});
+
+		map.on('mouseup', () => {
+			clearTimeout(pressTimer);
+			startPos = null;
+		});
+
 		watchId = navigator.geolocation.watchPosition(
 			(pos) => {
 				const lat = pos.coords.latitude;
@@ -257,7 +258,8 @@
 				if (lastLat !== null && lastLng !== null) {
 					const move = calcDistance(lastLat, lastLng, lat, lng);
 					if (move > 0.3) {
-						heading = calcBearing(lastLat, lastLng, lat, lng); // ★ $state() なので代入OK
+						// ★ ここを 1 → 0.3 に変更
+						heading = calcBearing(lastLat, lastLng, lat, lng);
 					}
 				}
 				lastLat = lat;
@@ -279,15 +281,33 @@
 				if (inner) {
 					inner.style.transform = `rotate(${heading}deg)`;
 				}
-
+				/******************/
+				// ★ 追加：進行方向モードのときはカヤックを回転させない
+				if (inner) {
+					if (!isHeadingUp) {
+						// 北固定モード → カヤックを heading に合わせて回転
+						inner.style.transform = `rotate(${heading}deg)`;
+					} else {
+						// 進行方向モード → カヤックは常に上向き
+						inner.style.transform = `rotate(0deg)`;
+					}
+				}
+				// --- ★ 追加：地図の向き制御 ---
+				if (isTracking) {
+					if (isHeadingUp) {
+						map.setBearing(heading); // 進行方向を上
+					} else {
+						map.setBearing(0); // 北を上
+					}
+				}
+				/******************/
 				/* ▼ 現在地追従 */
 				if (isTracking) {
-					// ★ trackingValue → isTracking に統一
 					map.setCenter([lng, lat]);
 				}
 
 				/* ▼ 軌跡 */
-				track.push([lng, lat]); // ★ $state([]) なので push でOK
+				track.push([lng, lat]);
 				updateTrackLine();
 
 				/* ▼ 軌跡の表示/非表示 */
@@ -304,8 +324,8 @@
 
 					const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
 
-					// ★ Svelte 5 では set() は使えない
-					wpInfo = `距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`;
+					//					wpInfo = `距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`;
+					wpInfo = `距離: ${distStr} \n方位: ${bearing.toFixed(1)}°`;
 
 					const lineData = {
 						type: 'Feature',
@@ -334,7 +354,7 @@
 							}
 						});
 
-						wpLineAdded = true; // ★ $state() なので代入でOK
+						wpLineAdded = true;
 					} else {
 						map.getSource('wp-line').setData(lineData);
 					}
@@ -346,6 +366,66 @@
 
 		return cleanup;
 	});
+
+	function handleLongPress(e) {
+		const wLat = e.lngLat.lat;
+		const wLng = e.lngLat.lng;
+
+		waypoint = [wLat, wLng];
+
+		if (!wpMarker) {
+			wpMarker = new maplibregl.Marker({ color: 'green' }).setLngLat([wLng, wLat]).addTo(map);
+		} else {
+			wpMarker.setLngLat([wLng, wLat]);
+		}
+
+		if (marker) {
+			const pos = marker.getLngLat();
+			const lat = pos.lat;
+			const lng = pos.lng;
+
+			const dist = calcDistance(lat, lng, wLat, wLng);
+			const bearing = calcBearing(lat, lng, wLat, wLng);
+
+			const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
+
+			wpInfo = `距離: ${distStr}\n方位: ${bearing.toFixed(1)}°`;
+
+			const lineData = {
+				type: 'Feature',
+				geometry: {
+					type: 'LineString',
+					coordinates: [
+						[lng, lat],
+						[wLng, wLat]
+					]
+				}
+			};
+
+			if (!wpLineAdded) {
+				map.addSource('wp-line', {
+					type: 'geojson',
+					data: lineData
+				});
+
+				map.addLayer({
+					id: 'wp-line-layer',
+					type: 'line',
+					source: 'wp-line',
+					paint: {
+						'line-color': 'blue',
+						'line-width': 3
+					}
+				});
+
+				wpLineAdded = true;
+			} else {
+				map.getSource('wp-line').setData(lineData);
+			}
+		} else {
+			wpInfo = 'WP 設定済み（現在位置未取得）';
+		}
+	}
 
 	function createKayakIcon() {
 		const outer = document.createElement('div');
@@ -378,7 +458,7 @@
 				source: 'track',
 				paint: { 'line-color': 'red', 'line-width': 3 }
 			});
-			trackLine = true; // ★ $state() なので代入でOK
+			trackLine = true;
 		} else {
 			map.getSource('track').setData({
 				type: 'Feature',
@@ -392,7 +472,6 @@
 
 <div class="overlay bottom-right-2">
 	<label class="switch">
-		<!-- ★ Svelte 5 では store の $ 展開は非推奨 -->
 		<input type="checkbox" bind:checked={isTracking} />
 		<span class="slider"></span>
 	</label>
@@ -401,19 +480,19 @@
 
 <div class="overlay bottom-right">
 	<button
-		on:click={clearWaypoint}
+		onclick={clearWaypoint}
 		style="background: {waypoint ? '#0078d4' : '#888'}; color: white;"
 	>
 		WPクリア
 	</button>
 </div>
+
 <div class="overlay top-right">
 	{wpInfo}
 </div>
 
 <div class="overlay bottom-left-2">
 	<label class="switch">
-		<!-- ★ Svelte 5 では store の $ 展開は使わない -->
 		<input type="checkbox" bind:checked={isPathOn} />
 		<span class="slider"></span>
 	</label>
@@ -421,7 +500,15 @@
 </div>
 
 <div class="overlay bottom-left-3">
-	<button on:click={clearTrack} style="background:#888; color:white;"> 軌跡クリア </button>
+	<button onclick={clearTrack} style="background:#888; color:white;"> 軌跡クリア </button>
+</div>
+
+<div class="overlay top-left">
+	<label class="switch">
+		<input type="checkbox" bind:checked={isHeadingUp} />
+		<span class="slider"></span>
+	</label>
+	<span style="margin-left:8px;">進行方向</span>
 </div>
 
 <style>
@@ -439,7 +526,8 @@
 		padding: 6px 10px;
 		border-radius: 6px;
 		z-index: 1000;
-		font-size: 14px;
+		font-size: 20px;
+		white-space: pre-line;
 	}
 
 	.bottom-right {

@@ -249,70 +249,6 @@
 			startPos = null;
 		});
 
-		/*
-		map.on('click', (e) => {
-			const wLat = e.lngLat.lat;
-			const wLng = e.lngLat.lng;
-
-			waypoint = [wLat, wLng];
-
-			if (!wpMarker) {
-				wpMarker = new maplibregl.Marker({ color: 'green' }).setLngLat([wLng, wLat]).addTo(map);
-			} else {
-				wpMarker.setLngLat([wLng, wLat]);
-			}
-
-			if (marker) {
-				const pos = marker.getLngLat();
-				const lat = pos.lat;
-				const lng = pos.lng;
-
-				const dist = calcDistance(lat, lng, wLat, wLng);
-				const bearing = calcBearing(lat, lng, wLat, wLng);
-
-				const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
-
-				//				wpInfo = `距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`;
-				wpInfo = `距離: ${distStr} \n方位: ${bearing.toFixed(1)}°`;
-
-				// WP ライン
-				const lineData = {
-					type: 'Feature',
-					geometry: {
-						type: 'LineString',
-						coordinates: [
-							[lng, lat],
-							[wLng, wLat]
-						]
-					}
-				};
-
-				if (!wpLineAdded) {
-					map.addSource('wp-line', {
-						type: 'geojson',
-						data: lineData
-					});
-
-					map.addLayer({
-						id: 'wp-line-layer',
-						type: 'line',
-						source: 'wp-line',
-						paint: {
-							'line-color': 'blue',
-							'line-width': 3
-						}
-					});
-
-					wpLineAdded = true;
-				} else {
-					map.getSource('wp-line').setData(lineData);
-				}
-			} else {
-				wpInfo = 'WP 設定済み（現在位置未取得）';
-			}
-		});
-		*/
-
 		watchId = navigator.geolocation.watchPosition(
 			(pos) => {
 				const lat = pos.coords.latitude;
@@ -321,7 +257,7 @@
 				/* ▼ heading 計算（進行方向） */
 				if (lastLat !== null && lastLng !== null) {
 					const move = calcDistance(lastLat, lastLng, lat, lng);
-					if (move > 0.3) {
+					if (move > 0.8) {
 						// ★ ここを 1 → 0.3 に変更
 						heading = calcBearing(lastLat, lastLng, lat, lng);
 					}
