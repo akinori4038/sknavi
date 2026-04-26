@@ -1,0 +1,27 @@
+sknavi-kit
+„           
+„¥„Ÿsrc
+„   „   app.html
+„   „   
+„   „¥„Ÿlib
+„   „   „   index.js
+„   „   „   stores.js
+„   „   „   
+„   „   „¤„Ÿassets
+„   „           favicon.svg
+„   „           
+„   „¤„Ÿroutes
+„       „   +layout.js
+„       „   +layout.svelte
+„       „   +page.svelte
+„       „   
+„       „¥„Ÿmap
+„       „       +page.svelte
+„       „       
+„       „¤„Ÿweather
+„               +page.svelte
+„               
+„¤„Ÿstatic
+        favicon.png
+        robots.txt
+        

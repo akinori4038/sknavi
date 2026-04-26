@@ -1,37 +1,129 @@
 <script>
 	import { onMount } from 'svelte';
 	import maplibregl from 'maplibre-gl';
+	import { lastLatStore } from '$lib/stores.js';
+	import { lastLngStore } from '$lib/stores.js';
+	import { headingStore } from '$lib/stores.js';
+	import { isTrackingStore } from '$lib/stores.js';
+	import { isPathOnStore } from '$lib/stores.js';
+	import { wpInfoStore } from '$lib/stores.js';
+	import { trackStore } from '$lib/stores.js';
+	import { totalDistanceStore } from '$lib/stores';
+	import { isHeadingUpStore } from '$lib/stores.js';
+	import { waypointStore } from '$lib/stores.js';
+	import { wpLineAddedStore } from '$lib/stores.js';
+	import { mapState } from '$lib/stores.js';
+	import { get } from 'svelte/store';
+	import { tick } from 'svelte';
 
-	let map = $state(null);
+	let map = null;
+
 	let isTracking = $state(true); // 現在地追従
-	let isPathOn = $state(false); // 軌跡表示
-	let wpInfo = $state(''); // WP距離・方位
+	$effect(() => {
+		const un = isTrackingStore.subscribe((v) => (isTracking = v));
+		return un;
+	});
+	$effect(() => {
+		isTrackingStore.set(isTracking);
+	});
 
-	let watchId = $state(null);
-	let marker = $state(null);
+	let isPathOn = $state(false); // 軌跡表示
+	$effect(() => {
+		const un = isPathOnStore.subscribe((v) => (isPathOn = v));
+		return un;
+	});
+	$effect(() => {
+		isPathOnStore.set(isPathOn);
+	});
+
+	let wpInfo = $state(''); // WP距離・方位
+	$effect(() => {
+		const un = wpInfoStore.subscribe((v) => (wpInfo = v));
+		return un;
+	});
+	$effect(() => {
+		wpInfoStore.set(wpInfo);
+	});
+
+	let watchId = null;
+
+	let marker = null;
+
 	let track = $state([]); // 配列もOK
-	let trackLine = $state(null);
+	$effect(() => {
+		const un = trackStore.subscribe((v) => (track = v ?? []));
+		return un;
+	});
+	$effect(() => {
+		trackStore.set(track);
+	});
+
+	let trackLine = null;
 
 	let heading = $state(0);
+	$effect(() => {
+		const un = headingStore.subscribe((v) => (heading = v));
+		return un;
+	});
+	$effect(() => {
+		headingStore.set(heading);
+	});
+
 	let lastLat = $state(null);
+	$effect(() => {
+		const un = lastLatStore.subscribe((v) => (lastLat = v));
+		return un;
+	});
+	$effect(() => {
+		lastLatStore.set(lastLat);
+	});
+
 	let lastLng = $state(null);
+	$effect(() => {
+		const un = lastLngStore.subscribe((v) => (lastLng = v));
+		return un;
+	});
+	$effect(() => {
+		lastLngStore.set(lastLng);
+	});
 
 	let waypoint = $state(null);
-	let wpMarker = $state(null);
+	$effect(() => {
+		const un = waypointStore.subscribe((v) => (waypoint = v));
+		return un;
+	});
+	$effect(() => {
+		waypointStore.set(waypoint);
+	});
+
+	let wpMarker = null; // sio_deb
+
 	let wpLineAdded = $state(false);
+	$effect(() => {
+		const un = wpLineAddedStore.subscribe((v) => (wpLineAdded = v));
+		return un;
+	});
+	$effect(() => {
+		wpLineAddedStore.set(wpLineAdded);
+	});
 
 	// ★ 追加：進行方向モード（Heading-Up）
 	let isHeadingUp = $state(false); // false = 北固定, true = 進行方向を上
+	$effect(() => {
+		const un = isHeadingUpStore.subscribe((v) => (isHeadingUp = v));
+		return un;
+	});
+	$effect(() => {
+		isHeadingUpStore.set(isHeadingUp);
+	});
 
 	let windDir = $state(0); // 風向（度）
 	let windTimer = null;
 	let windTime = $state(0); // 前回取得のタイムスタンプ(ms)
 	let windError = $state(true); // 風向取得エラー
 	let windSpeed = $state(0); // ★ 風速（m/s）
-	/* -----------------------------
-     ▼ Wake Lock（スリープ防止）
-  ------------------------------ */
-	let wakeLock = $state(null);
+
+	let wakeLock = $state(null); //  Wake Lock（スリープ防止）
 
 	async function enableWakeLock() {
 		try {
@@ -117,6 +209,7 @@
 		wpInfo = '';
 	}
 
+	/*
 	function clearTrack() {
 		track = [];
 
@@ -127,8 +220,24 @@
 			});
 		}
 	}
+	*/
+	function clearTrack() {
+		// 軌跡クリア（store を空にする）
+		trackStore.set([]);
 
-	onMount(() => {
+		// 累積距離クリア
+		totalDistanceStore.set(0);
+
+		// 地図上のラインもクリア
+		if (map.getSource('track')) {
+			map.getSource('track').setData({
+				type: 'Feature',
+				geometry: { type: 'LineString', coordinates: [] }
+			});
+		}
+	}
+
+	onMount(async () => {
 		/* ▼ 地図画面に入った瞬間に Wake Lock ON */
 		enableWakeLock();
 
@@ -148,16 +257,74 @@
 		};
 
 		/* ---------------- 地図初期化 ---------------- */
+		// ★ SvelteKit では DOM が毎回破棄されるため、map は毎回 new する
 
-		map = new maplibregl.Map({
-			container: 'map',
-			style: {
-				version: 8,
-				sources: {},
-				layers: []
-			},
+		await tick();
+
+		const saved = get(mapState) ?? {
 			center: [139.767125, 35.681236],
-			zoom: 14
+			zoom: 14,
+			bearing: 0,
+			pitch: 0
+		};
+
+		try {
+			map = new maplibregl.Map({
+				container: 'map',
+				style: { version: 8, sources: {}, layers: [] },
+				center: saved.center,
+				zoom: saved.zoom,
+				bearing: saved.bearing,
+				pitch: saved.pitch
+			});
+		} catch (e) {
+			console.error('Map init error:', e);
+		}
+
+		trackLine = false;
+		wpLineAdded = false;
+
+		// ★ 追加：初期描画を強制
+		setTimeout(() => map.resize(), 0);
+		/*
+		map.on('moveend', () => {
+			mapState.set({
+				center: map.getCenter().toArray(),
+				zoom: map.getZoom(),
+				bearing: map.getBearing(),
+				pitch: map.getPitch()
+			});
+		});
+
+		map.on('zoomend', () => {
+			mapState.set({
+				center: map.getCenter().toArray(),
+				zoom: map.getZoom(),
+				bearing: map.getBearing(),
+				pitch: map.getPitch()
+			});
+		});
+*/
+
+		// ズーム操作時：zoom のみ保存
+		map.on('zoomend', () => {
+			mapState.update((s) => ({
+				...s,
+				zoom: map.getZoom()
+				//				center: map.getCenter().toArray(),
+				//				bearing: map.getBearing(),
+				//				pitch: map.getPitch()
+			}));
+		});
+
+		// ドラッグ・回転・傾き操作時：center / bearing / pitch を保存
+		map.on('moveend', () => {
+			mapState.update((s) => ({
+				...s,
+				center: map.getCenter().toArray(),
+				bearing: map.getBearing(),
+				pitch: map.getPitch()
+			}));
 		});
 
 		map.on('load', () => {
@@ -186,7 +353,68 @@
 			});
 		});
 
-		/*------------WP 設定　クリック動作処理----Start-------*/
+		/* ---------------- style 完全構築後（idle）に復元処理 ---------------- */
+		map.on('idle', () => {
+			/* --- WP マーカー復元 --- */
+			if (waypoint && !wpMarker) {
+				const [wLat, wLng] = waypoint;
+
+				wpMarker = new maplibregl.Marker({ color: 'green' }).setLngLat([wLng, wLat]).addTo(map);
+
+				// WP ライン復元
+				if (lastLat !== null && lastLng !== null && !map.getSource('wp-line')) {
+					const lineData = {
+						type: 'Feature',
+						geometry: {
+							type: 'LineString',
+							coordinates: [
+								[lastLng, lastLat],
+								[wLng, wLat]
+							]
+						}
+					};
+
+					map.addSource('wp-line', {
+						type: 'geojson',
+						data: lineData
+					});
+
+					map.addLayer({
+						id: 'wp-line-layer',
+						type: 'line',
+						source: 'wp-line',
+						paint: {
+							'line-color': 'blue',
+							'line-width': 3
+						}
+					});
+
+					wpLineAdded = true;
+				}
+			}
+
+			/* --- 軌跡レイヤー復元 --- */
+			if (track.length > 1 && !map.getSource('track')) {
+				map.addSource('track', {
+					type: 'geojson',
+					data: {
+						type: 'Feature',
+						geometry: { type: 'LineString', coordinates: track }
+					}
+				});
+
+				map.addLayer({
+					id: 'track-layer',
+					type: 'line',
+					source: 'track',
+					paint: { 'line-color': 'red', 'line-width': 3 }
+				});
+
+				trackLine = true;
+			}
+		});
+
+		//------------WP 設定　クリック動作処理----Start-------
 		let pressTimer = null;
 		let longPressDuration = 600; // 長押し判定時間
 		let startPos = null;
@@ -254,134 +482,150 @@
 			clearTimeout(pressTimer);
 			startPos = null;
 		});
-		/*------------WP 設定　クリック動作処理--End------------*/
+		//------------WP 設定　クリック動作処理--End------------
 
 		/*------------ 風向きの定期取得（300秒） ------------*/
-		windTimer = setInterval(() => {
-			if (lastLat != null && lastLng != null) {
-				fetchWind();
-			}
-		}, 300000);
+		if (!windTimer) {
+			windTimer = setInterval(() => {
+				if (lastLat != null && lastLng != null) {
+					fetchWind();
+				}
+			}, 300000);
+		}
 
 		/*------------ GPS 更新 ------------*/
-		watchId = navigator.geolocation.watchPosition(
-			(pos) => {
-				const lat = pos.coords.latitude;
-				const lng = pos.coords.longitude;
+		if (!watchId) {
+			watchId = navigator.geolocation.watchPosition(
+				(pos) => {
+					const lat = pos.coords.latitude;
+					const lng = pos.coords.longitude;
 
-				/*--- ▼ 進行方向（heading）の計算 ---*/
-				if (lastLat !== null && lastLng !== null) {
-					const move = calcDistance(lastLat, lastLng, lat, lng);
-					if (move > 0.3) {
-						// ★ ここを 1 → 0.3 に変更
-						heading = calcBearing(lastLat, lastLng, lat, lng);
-					}
-				}
-				lastLat = lat;
-				lastLng = lng;
-				/*--- ▲--------------------------------*/
-
-				/* ★ GPS 更新直後に風向きを取得（初回も確実に成功） */
-				fetchWind();
-
-				/*--- ▼ カカヤックアイコンの生成・更新 ---*/
-				if (!marker) {
-					marker = new maplibregl.Marker({
-						element: createKayakIcon()
-					})
-						.setLngLat([lng, lat])
-						.addTo(map);
-				} else {
-					marker.setLngLat([lng, lat]);
-				}
-
-				// heading に応じて回転
-				const inner = marker.getElement().querySelector('.kayak-rot');
-				if (inner) {
-					inner.style.transform = `rotate(${heading}deg)`;
-				}
-				/******************/
-				// ★ 追加：進行方向モードのときはカヤックを回転させない
-				if (inner) {
-					if (!isHeadingUp) {
-						// 北固定モード → カヤックを heading に合わせて回転
-						inner.style.transform = `rotate(${heading}deg)`;
-					} else {
-						// 進行方向モード → カヤックは常に上向き
-						inner.style.transform = `rotate(0deg)`;
-					}
-				}
-				// --- ★ 追加：地図の向き制御 ---
-				if (isTracking) {
-					if (isHeadingUp) {
-						map.setBearing(heading); // 進行方向を上
-					} else {
-						map.setBearing(0); // 北を上
-					}
-				}
-
-				/*--- ▼ 現在地追従（センタリング） ---*/
-				if (isTracking) {
-					map.setCenter([lng, lat]);
-				}
-
-				/*--- ▼ 軌跡（トラックライン）の更新 ---*/
-				track.push([lng, lat]);
-				updateTrackLine();
-
-				/* ▼ 軌跡の表示/非表示 */
-				if (map.getLayer('track-layer')) {
-					map.setLayoutProperty('track-layer', 'visibility', isPathOn ? 'visible' : 'none'); // ★ pathVisible → isPathOn に統一
-				}
-
-				/*--- ▼ WP（ウェイポイント）情報の更新 ---*/
-				if (waypoint) {
-					const [wLat, wLng] = waypoint;
-
-					const dist = calcDistance(lat, lng, wLat, wLng);
-					const bearing = calcBearing(lat, lng, wLat, wLng);
-
-					const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
-
-					//					wpInfo = `距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`;
-					wpInfo = `距離: ${distStr} \n方位: ${bearing.toFixed(1)}°`;
-
-					const lineData = {
-						type: 'Feature',
-						geometry: {
-							type: 'LineString',
-							coordinates: [
-								[lng, lat],
-								[wLng, wLat]
-							]
+					/*--- ▼ 進行方向（heading）の計算 ---*/
+					if (lastLat !== null && lastLng !== null) {
+						const move = calcDistance(lastLat, lastLng, lat, lng);
+						if (move > 0.7) {
+							// ★ ここを 1 → 0.7 に変更
+							heading = calcBearing(lastLat, lastLng, lat, lng);
 						}
-					};
-
-					if (!wpLineAdded) {
-						map.addSource('wp-line', {
-							type: 'geojson',
-							data: lineData
-						});
-
-						map.addLayer({
-							id: 'wp-line-layer',
-							type: 'line',
-							source: 'wp-line',
-							paint: {
-								'line-color': 'blue',
-								'line-width': 3
-							}
-						});
-
-						wpLineAdded = true;
-					} else {
-						map.getSource('wp-line').setData(lineData);
 					}
-				}
-			},
-			console.warn,
-			{ enableHighAccuracy: true }
-		);
+					lastLat = lat;
+					lastLng = lng;
+					/*--- ▲--------------------------------*/
+
+					/* ★ GPS 更新直後に風向きを取得（初回も確実に成功） */
+					fetchWind();
+
+					/*--- ▼ カカヤックアイコンの生成・更新 ---*/
+					if (!marker) {
+						marker = new maplibregl.Marker({
+							element: createKayakIcon()
+						})
+							.setLngLat([lng, lat])
+							.addTo(map);
+					} else {
+						marker.setLngLat([lng, lat]);
+					}
+
+					// heading に応じて回転
+					const inner = marker.getElement().querySelector('.kayak-rot');
+					if (inner) {
+						inner.style.transform = `rotate(${heading}deg)`;
+					}
+					/******************/
+					// ★ 追加：進行方向モードのときはカヤックを回転させない
+					if (inner) {
+						if (!isHeadingUp) {
+							// 北固定モード → カヤックを heading に合わせて回転
+							inner.style.transform = `rotate(${heading}deg)`;
+						} else {
+							// 進行方向モード → カヤックは常に上向き
+							inner.style.transform = `rotate(0deg)`;
+						}
+					}
+					// --- ★ 追加：地図の向き制御 ---
+					if (isTracking) {
+						if (isHeadingUp) {
+							map.setBearing(heading); // 進行方向を上
+						} else {
+							map.setBearing(0); // 北を上
+						}
+					}
+
+					/*--- ▼ 現在地追従（センタリング） ---*/
+					if (isTracking) {
+						map.setCenter([lng, lat]);
+					}
+
+					/*--- ▼ 軌跡（トラックライン）の更新 ---*/
+					//track.push([lng, lat]);
+					trackStore.update((t) => {
+						if (t.length > 0) {
+							const [prevLng, prevLat] = t[t.length - 1];
+							const dist = calcDistance(prevLat, prevLng, lat, lng);
+
+							totalDistanceStore.update((d) => d + dist);
+						}
+
+						return [...t, [lng, lat]];
+					});
+
+					updateTrackLine();
+
+					/* ▼ 軌跡の表示/非表示 */
+					if (map.getLayer('track-layer')) {
+						map.setLayoutProperty('track-layer', 'visibility', isPathOn ? 'visible' : 'none'); // ★ pathVisible → isPathOn に統一
+					}
+
+					/*--- ▼ WP（ウェイポイント）情報の更新 ---*/
+					if (waypoint) {
+						const [wLat, wLng] = waypoint;
+
+						const dist = calcDistance(lat, lng, wLat, wLng);
+						const bearing = calcBearing(lat, lng, wLat, wLng);
+
+						const distStr =
+							dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${dist.toFixed(0)} m`;
+
+						//					wpInfo = `距離: ${distStr} / 方位: ${bearing.toFixed(1)}°`;
+						wpInfo = `距離: ${distStr} \n方位: ${bearing.toFixed(1)}°`;
+
+						const lineData = {
+							type: 'Feature',
+							geometry: {
+								type: 'LineString',
+								coordinates: [
+									[lng, lat],
+									[wLng, wLat]
+								]
+							}
+						};
+
+						if (!wpLineAdded) {
+							map.addSource('wp-line', {
+								type: 'geojson',
+								data: lineData
+							});
+
+							map.addLayer({
+								id: 'wp-line-layer',
+								type: 'line',
+								source: 'wp-line',
+								paint: {
+									'line-color': 'blue',
+									'line-width': 3
+								}
+							});
+
+							wpLineAdded = true;
+						} else {
+							map.getSource('wp-line').setData(lineData);
+						}
+					}
+				},
+				console.warn,
+				{ enableHighAccuracy: true }
+			);
+		}
 
 		return cleanup;
 	});
@@ -513,6 +757,7 @@
 	 * - trackLine は「軌跡レイヤーが既に追加済みか」を示すフラグ
 	 */
 	function updateTrackLine() {
+		const track = get(trackStore); // ← store から現在の軌跡を取得
 		if (!trackLine) {
 			map.addSource('track', {
 				type: 'geojson',
@@ -641,6 +886,10 @@
 	<span style="margin-left:8px;">軌跡表示</span>
 </div>
 
+<div class="overlay bottom-left-distance">
+	距離: {($totalDistanceStore / 1000).toFixed(2)} km
+</div>
+
 <div class="overlay bottom-left-3">
 	<button onclick={clearTrack} style="background:#888; color:white;"> 軌跡クリア </button>
 </div>
@@ -656,7 +905,19 @@
 {#if isTracking}
 	<div class="overlay top-right-wind">
 		{#if windError}
-			<img src="/x-icon.svg" alt="wind" class="wind-icon" />
+			<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+				<!-- 点線の円 -->
+				<circle
+					cx="50"
+					cy="50"
+					r="35"
+					fill="none"
+					stroke="#3399ff"
+					stroke-width="3"
+					stroke-dasharray="10 10"
+					stroke-linecap="round"
+				/>
+			</svg>
 		{:else}
 			<svg
 				width="60"
@@ -700,6 +961,19 @@
 		z-index: 1000;
 		font-size: 20px;
 		white-space: pre-line;
+	}
+
+	.overlay.bottom-left-distance {
+		position: absolute;
+		bottom: 12px; /* 軌跡クリアボタンと同じ高さ */
+		left: 130px; /* 軌跡クリアボタンの右側に配置 */
+		background: rgba(0, 0, 0, 0.6);
+		color: white;
+		padding: 6px 12px;
+		border-radius: 6px;
+		font-size: 14px;
+		z-index: 2000;
+		white-space: nowrap;
 	}
 
 	.bottom-right {
@@ -780,11 +1054,5 @@
 		padding: 6px;
 		border-radius: 6px;
 		z-index: 1000;
-	}
-
-	.wind-icon {
-		width: 60px;
-		height: 60px;
-		transform-origin: center center;
 	}
 </style>
