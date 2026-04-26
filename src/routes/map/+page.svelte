@@ -932,13 +932,7 @@
           transform-origin: center;
         "
 			>
-				<circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="4" />
-				<polygon
-					points="50,15 65,45 55,45 55,80 45,80 45,45 35,45"
-					fill="currentColor"
-					stroke="currentColor"
-					stroke-width="3"
-				/>
+				<polygon points="50,5 70,85 50,65 30,85" fill="currentColor" />
 			</svg>
 		{/if}
 	</div>
